@@ -1,5 +1,8 @@
+import matplotlib
+matplotlib.use('Agg') # This tells matplotlib to use a non-interactive backend for Streamlit deployment
+
 import streamlit as st
-import camelot
+import pdfplumber # <--- NEW import
 import pandas as pd
 import io
 import os
@@ -8,35 +11,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
 # --- Helper Functions and Data ---
+# (Keep all your existing helper functions and UNIT_CONVERSIONS as they are)
 
 # Define a dictionary for unit conversions
 UNIT_CONVERSIONS = {
-    "p-no/p hour": 1.0,
-    "p-no": 1.0,
-    "hour": 1.0,
-    "hours": 1.0,
-    "meters": 1.0,
-    "kilometers": 1000.0,
-    "each": 1.0,
-    "lot": 1.0,
-    "kgs": 1.0,
-    "tons": 1000.0,
-    "liters": 1.0,
-    "gallons": 3.785,
-    "days": 8.0,  # Assuming 8 working hours per day for calculation
-    "nos": 1.0,  # Common abbreviation for numbers
-    "pc": 1.0,  # Pieces
-    "set": 1.0,  # Sets
-    # Specific percentage units for 'Units No.'
-    "%": 100.0,
-    "%0": 1000.0,
-    "%o": 1000.0,  # Assuming typo for %0
-    "sqm": 1.0,  # Square meters
-    "cum": 1.0,  # Cubic meters
-    "lm": 1.0,  # Linear meters
-    # Add more unit mappings as needed: "your unit string": corresponding_number,
+    "p-no/p hour": 1.0, "p-no": 1.0, "hour": 1.0, "hours": 1.0, "meters": 1.0,
+    "kilometers": 1000.0, "each": 1.0, "lot": 1.0, "kgs": 1.0, "tons": 1000.0,
+    "liters": 1.0, "gallons": 3.785, "days": 8.0, "nos": 1.0, "pc": 1.0,
+    "set": 1.0, "%": 100.0, "%0": 1000.0, "%o": 1000.0, "sqm": 1.0, "cum": 1.0,
+    "lm": 1.0,
 }
-
 
 def convert_unit_to_number(unit_string):
     """
@@ -50,28 +34,20 @@ def convert_unit_to_number(unit_string):
     unit_string_cleaned = unit_string.strip().lower()
 
     # Specific logic for percentage units for 1000.0
-    # Added '% 0' and '% o' to this condition
     if "%0" in unit_string_cleaned or "%o" in unit_string_cleaned or "% 0" in unit_string_cleaned or "% o" in unit_string_cleaned:
         return 1000.0
     elif "%" in unit_string_cleaned:
         return 100.0
 
-    # Otherwise, use the general UNIT_CONVERSIONS dictionary
-    return UNIT_CONVERSIONS.get(unit_string_cleaned, 1.0)  # Default to 1.0 if not found for general units
-
+    return UNIT_CONVERSIONS.get(unit_string_cleaned, 1.0)
 
 def calculate_total_rate(input_rate, quantity, units_no):
     """Calculates Total Rate: (Input Rate * Quantity) / Units No."""
-    # Convert inputs to numeric, coercing errors to NaN, then fill NaN with 0
     input_rate = pd.to_numeric(input_rate, errors='coerce').fillna(0.0)
     quantity = pd.to_numeric(quantity, errors='coerce').fillna(0.0)
-    units_no = pd.to_numeric(units_no, errors='coerce').fillna(1.0)  # Avoid division by zero, treat 0 as 1
-
-    # Ensure units_no is not 0 for division
+    units_no = pd.to_numeric(units_no, errors='coerce').fillna(1.0)
     units_no = units_no.apply(lambda x: 1.0 if x == 0 else x)
-
     return (input_rate * quantity) / units_no
-
 
 def prepare_df_for_editor(df_original, pdf_column_mapping_rules, final_excel_column_order):
     """
@@ -79,14 +55,11 @@ def prepare_df_for_editor(df_original, pdf_column_mapping_rules, final_excel_col
     including extracted, calculated, and user-input columns.
     All column names will be flattened strings.
     """
-    # 1. Normalize original DataFrame's columns to flat strings
     temp_df = df_original.copy()
-    temp_df.columns = [str(col).strip() for col in temp_df.columns]  # Ensure all columns are strings
+    temp_df.columns = [str(col).strip() for col in temp_df.columns]
 
-    # Initialize the final DataFrame with all columns from final_excel_column_order
     processed_df = pd.DataFrame(columns=final_excel_column_order)
 
-    # Transfer data from original PDF columns to the new DataFrame
     for excel_col_name in final_excel_column_order:
         found_in_pdf = False
         for pdf_target_col, rules in pdf_column_mapping_rules.items():
@@ -110,12 +83,10 @@ def prepare_df_for_editor(df_original, pdf_column_mapping_rules, final_excel_col
     if processed_df.empty:
         processed_df = pd.DataFrame(columns=final_excel_column_order, index=[0])
 
-    # Ensure input columns are numeric and fill NaNs
     for col in ["Quantity", "Govt Rate - Input", "Quoted Rate - Input"]:
         if col in processed_df.columns:
             processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce').fillna(0.0)
 
-    # Initialize calculated columns with 0.0
     for col in ["Units No.", "Govt Rate - Total", "Quoted Rate - Total"]:
         if col in processed_df.columns:
             processed_df[col] = 0.0
@@ -129,7 +100,6 @@ def prepare_df_for_editor(df_original, pdf_column_mapping_rules, final_excel_col
 
     return processed_df
 
-
 def recalculate_editor_df_values(df):
     """
     Recalculates 'Units No.' and all 'Total Rate' columns
@@ -137,21 +107,17 @@ def recalculate_editor_df_values(df):
     """
     df_copy = df.copy()
 
-    # Recalculate 'Units No.' based on 'Units' column
     if "Units" in df_copy.columns:
         new_units_no_from_units = df_copy["Units"].apply(convert_unit_to_number)
         df_copy["Units No."] = new_units_no_from_units
 
-    # Ensure Units No. is numeric and handle potential zeros for division
     df_copy["Units No."] = pd.to_numeric(df_copy["Units No."], errors='coerce').fillna(1.0)
     df_copy["Units No."] = df_copy["Units No."].apply(lambda x: 1.0 if x == 0 else x)
 
-    # Ensure input rate and quantity columns are numeric
     for col in ["Quantity", "Govt Rate - Input", "Quoted Rate - Input"]:
         if col in df_copy.columns:
             df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce').fillna(0.0)
 
-    # 2. Recalculate 'Total Rate' columns
     if "Govt Rate - Input" in df_copy.columns and "Quantity" in df_copy.columns and "Units No." in df_copy.columns:
         df_copy["Govt Rate - Total"] = calculate_total_rate(
             df_copy["Govt Rate - Input"], df_copy["Quantity"], df_copy["Units No."])
@@ -170,7 +136,7 @@ st.title("📄 PDF Table Extractor & Editor")
 st.markdown("""
 Upload a PDF file to extract, edit, and consolidate tables. Calculated columns will update automatically.
 
-*Important:* This app uses the 'lattice' extraction method with a fixed line scale of 50.
+*Important:* This app will now use `pdfplumber` for extraction. You may need to fine-tune extraction settings for best results on different PDFs.
 """)
 
 # --- SESSION STATE INITIALIZATION ---
@@ -226,129 +192,180 @@ if extract_button:
         pdf_stream = io.BytesIO(uploaded_file.read())
 
         try:
-            pages_arg = 'all' if pages_input.strip() == "" else pages_input
+            pages_to_extract = None
+            if pages_input.strip() != "":
+                # Convert '1,3-5' to [1, 3, 4, 5]
+                pages_list = []
+                for p_range in pages_input.split(','):
+                    if '-' in p_range:
+                        start, end = map(int, p_range.split('-'))
+                        pages_list.extend(range(start, end + 1))
+                    else:
+                        pages_list.append(int(p_range))
+                pages_to_extract = sorted(list(set(pages_list))) # Unique and sorted
 
-            with st.spinner("Extracting tables using 'lattice' method..."):
-                read_pdf_kwargs = {
-                    'pages': pages_arg,
-                    'flavor': 'lattice',
-                    'split_text': True,
-                    'line_scale': 50  # Fixed line scale
-                }
+            all_extracted_dfs_from_pdfplumber = []
 
-                tables = camelot.read_pdf(
-                    pdf_stream,
-                    **read_pdf_kwargs
-                )
+            with st.spinner("Extracting tables using `pdfplumber`..."):
+                with pdfplumber.open(pdf_stream) as pdf:
+                    if pages_to_extract:
+                        # Extract only specified pages
+                        pages_iter = [pdf.pages[p - 1] for p in pages_to_extract if p <= len(pdf.pages)]
+                    else:
+                        # Iterate through all pages if no specific pages are given
+                        pages_iter = pdf.pages
 
-            if len(tables) == 0:
-                st.warning("No tables were found on the specified pages.")
-                st.info(
-                    "The extraction method is fixed to 'lattice'. Please ensure your PDF has a clear table structure with ruling lines.")
+                    for page in pages_iter:
+                        # pdfplumber's extract_tables method
+                        # You might need to adjust table_settings for your specific PDFs
+                        # 'snap_edges': False generally makes it more robust, 'line_scale' is like Camelot's
+                        # 'vertical_strategy': 'lines' and 'horizontal_strategy': 'lines' often work well
+                        tables_on_page = page.extract_tables(
+                            table_settings={
+                                "vertical_strategy": "lines",  # or "text" or "lines_strict" or "explicit_lines"
+                                "horizontal_strategy": "lines", # or "text" or "lines_strict" or "explicit_lines"
+                                "snap_tolerance": 3, # How close lines need to be to be considered snapped
+                                "snap_edges": False,
+                                "join_tolerance": 3,
+                                "edge_min_length": 5, # Minimum length of a line to be considered
+                                "min_words_horizontal": 1,
+                                "min_words_vertical": 1,
+                            }
+                        )
+                        for table_data in tables_on_page:
+                            # Convert list of lists (table_data) to DataFrame
+                            if table_data:
+                                # First row is assumed to be header, rest is data
+                                header = table_data[0]
+                                data = table_data[1:]
+                                df_temp = pd.DataFrame(data, columns=header)
+                                all_extracted_dfs_from_pdfplumber.append(df_temp)
+
+            if len(all_extracted_dfs_from_pdfplumber) == 0:
+                st.warning("No tables were found on the specified pages using `pdfplumber`.")
+                st.info("You may need to adjust the `table_settings` in the code for better extraction, or the PDF might not contain table structures `pdfplumber` can detect.")
+                st.session_state.extraction_success = False
                 st.stop()
             else:
-                st.success(f"Successfully extracted {len(tables)} table(s).")
-                sorted_tables = sorted(tables, key=lambda t: t.page)
+                st.success(f"Successfully extracted {len(all_extracted_dfs_from_pdfplumber)} table(s) using `pdfplumber`.")
 
-                first_table_obj = sorted_tables[0]
-                df_first_page = first_table_obj.df.copy()
-                df_first_page.columns = [str(col).strip() for col in df_first_page.columns]
+                # For simplicity, let's process the first extracted table to find header,
+                # then apply that mapping to all tables.
+                first_extracted_df_raw = all_extracted_dfs_from_pdfplumber[0].copy()
+                # Clean up initial header row for matching
+                first_extracted_df_raw.columns = [str(col).strip() for col in first_extracted_df_raw.columns]
 
-                best_header_row_idx_first_page = -1
+
+                best_header_row_idx_first_page = -1 # This logic might need refinement for pdfplumber's raw output
                 max_matches_first_page = 0
                 header_column_map_from_first_page = {}
 
-                for row_idx in range(min(5, df_first_page.shape[0])):
-                    current_row_values_cleaned = [str(cell).strip().lower() for cell in
-                                                  df_first_page.iloc[row_idx].tolist()]
-                    current_matches = 0
-                    temp_header_col_map = {}
+                if not all_extracted_dfs_from_pdfplumber: # Should have been caught by early warning
+                    st.info("No tables to process after extraction.")
+                    st.session_state.extraction_success = False
+                    st.stop()
 
-                    for target_col_name, rules in pdf_column_mapping_rules.items():
-                        for i, header_cell_content in enumerate(current_row_values_cleaned):
-                            if any(keyword in header_cell_content for keyword in rules["keywords"]):
-                                temp_header_col_map[target_col_name] = i
-                                current_matches += 1
-                                break
+                # Get the first DataFrame and attempt to find headers
+                df_first_extracted_table = all_extracted_dfs_from_pdfplumber[0].copy()
 
-                    if current_matches > max_matches_first_page:
-                        max_matches_first_page = current_matches
-                        best_header_row_idx_first_page = row_idx
-                        header_column_map_from_first_page = temp_header_col_map.copy()
+                # Clean up extracted header row values for matching
+                # pdfplumber's extract_tables returns a list of lists.
+                # The first sublist is usually the header row.
+                # Let's make sure our header matching logic works with this.
 
-                    if max_matches_first_page == len(pdf_column_mapping_rules):
-                        break
+                # Use the actual column names from the first extracted df for matching
+                potential_header_row_values = [str(col).strip().lower() for col in df_first_extracted_table.columns.tolist()]
+
+                current_matches = 0
+                temp_header_col_map = {}
+
+                for target_col_name, rules in pdf_column_mapping_rules.items():
+                    for i, header_cell_content in enumerate(potential_header_row_values):
+                        if any(keyword in header_cell_content for keyword in rules["keywords"]):
+                            # Map the target column name (e.g., "Sr No.") to its index in the extracted DataFrame
+                            temp_header_col_map[target_col_name] = df_first_extracted_table.columns[i] # Store the actual column name from pdfplumber
+                            current_matches += 1
+                            break # Move to next target_col_name
+
+                if current_matches > 0: # If at least one header found
+                    st.success(f"Headers identified in the first extracted table. Applying this structure.")
+                    st.session_state.header_detection_failed = False
+                    header_column_map_from_first_page = temp_header_col_map.copy()
+                else:
+                    st.info("Could not identify clear headers in the first extracted table. Displaying raw extraction and attempting best-effort mapping.")
+                    st.session_state.header_detection_failed = True
+
 
                 all_processed_dfs_for_concat = []
 
-                if best_header_row_idx_first_page == -1:
-                    st.info("Could not identify a clear header row with key columns. Displaying raw extraction.")
-                    for table_obj in sorted_tables:
-                        df_raw = table_obj.df.copy()
-                        df_raw.columns = [str(col).strip() for col in df_raw.columns]
+                for table_idx, df_raw_pdfplumber in enumerate(all_extracted_dfs_from_pdfplumber):
+                    # For pdfplumber, the first row of each extracted table is its header.
+                    # We'll use the header mapping derived from the FIRST table.
+                    # If header detection failed, we just pass the raw data.
 
+                    current_processed_df_data = {}
+
+                    if st.session_state.header_detection_failed:
+                        # Fallback: if header detection failed, just try to map existing columns if they match
                         editor_df = pd.DataFrame(columns=final_display_excel_column_order)
+                        raw_cols_cleaned = [str(c).strip().lower() for c in df_raw_pdfplumber.columns.tolist()]
+                        for final_col_name in final_display_excel_column_order:
+                            found_col = False
+                            for map_key, rules in pdf_column_mapping_rules.items():
+                                if final_col_name == map_key:
+                                    for keyword in rules['keywords']:
+                                        if keyword in raw_cols_cleaned:
+                                            try:
+                                                col_index = raw_cols_cleaned.index(keyword)
+                                                # Use the actual column name from df_raw_pdfplumber
+                                                editor_df[final_col_name] = df_raw_pdfplumber[df_raw_pdfplumber.columns[col_index]].reset_index(drop=True)
+                                                found_col = True
+                                                break
+                                            except ValueError:
+                                                pass # Keyword not in current raw_cols_cleaned
+                                if found_col: break
+                            if not found_col:
+                                editor_df[final_col_name] = pd.Series(dtype='object', index=range(len(df_raw_pdfplumber)))
+                        # If df_raw_pdfplumber was empty or just header, ensure editor_df is not empty
+                        if editor_df.empty and len(df_raw_pdfplumber) <=1:
+                            editor_df = pd.DataFrame(columns=final_display_excel_column_order, index=[0])
 
-                        for col in final_display_excel_column_order:
-                            if col in df_raw.columns:
-                                editor_df[col] = df_raw[col].reset_index(drop=True)
-                            else:
-                                editor_df[col] = pd.Series(dtype='object', index=range(len(df_raw)))
-
-                        editor_df = recalculate_editor_df_values(editor_df)
-                        all_processed_dfs_for_concat.append(editor_df)
-
-                    st.session_state.header_detection_failed = True
-                else:
-                    st.success(
-                        f"Headers identified on page {first_table_obj.page}, row {best_header_row_idx_first_page + 1}. Applying this structure.")
-                    st.session_state.header_detection_failed = False
-
-                    for table_obj in sorted_tables:
-                        df = table_obj.df.copy()
-                        df.columns = [str(col).strip() for col in df.columns]
-
-                        current_processed_df_data = {}
-
-                        start_data_row = best_header_row_idx_first_page + 1 if table_obj.page == first_table_obj.page else 0
-
+                    else: # Headers were successfully identified from the first table
                         for target_col_name in final_display_excel_column_order:
-                            original_col_index = header_column_map_from_first_page.get(target_col_name)
+                            original_col_name_from_pdfplumber = header_column_map_from_first_page.get(target_col_name)
 
-                            if original_col_index is not None and original_col_index < df.shape[1]:
-                                col_data = df.iloc[start_data_row:, original_col_index].reset_index(drop=True)
+                            if original_col_name_from_pdfplumber is not None and original_col_name_from_pdfplumber in df_raw_pdfplumber.columns:
+                                col_data = df_raw_pdfplumber[original_col_name_from_pdfplumber].reset_index(drop=True)
                                 current_processed_df_data[target_col_name] = col_data
                             else:
-                                current_processed_df_data[target_col_name] = pd.Series(dtype='object', index=range(
-                                    df.shape[0] - start_data_row))
+                                current_processed_df_data[target_col_name] = pd.Series(dtype='object', index=range(len(df_raw_pdfplumber)))
 
                         extracted_flat_df = pd.DataFrame(current_processed_df_data)
 
                         editor_df = prepare_df_for_editor(
                             extracted_flat_df,
-                            pdf_column_mapping_rules,
+                            pdf_column_mapping_rules, # Still useful for identifying column types based on content
                             final_display_excel_column_order
                         )
 
-                        editor_df = recalculate_editor_df_values(editor_df)
+                    editor_df = recalculate_editor_df_values(editor_df)
+                    all_processed_dfs_for_concat.append(editor_df)
 
-                        all_processed_dfs_for_concat.append(editor_df)
 
                 if all_processed_dfs_for_concat:
                     st.session_state.single_combined_df = pd.concat(all_processed_dfs_for_concat, ignore_index=True)
                     st.session_state.extraction_success = True
                 else:
-                    st.info("No tables could be processed with the specified column headers or no tables found at all.")
+                    st.info("No tables could be processed with `pdfplumber` for display.")
                     st.session_state.extraction_success = False
 
         except Exception as e:
             st.error(f"An error occurred during PDF extraction: {e}")
-            st.info(
-                "Please check your PDF file or page number input. This app relies on the 'lattice' method, which requires clear table ruling lines. Error details: " + str(
-                    e))
+            st.info("Please check your PDF file or page number input. `pdfplumber` relies on clear table structures. Error details: " + str(e))
             st.session_state.extraction_success = False
 
 # --- Display Data Editor if Extraction was Successful and data exists ---
+# (The rest of your code from here downwards remains exactly the same)
 if 'extraction_success' in st.session_state and st.session_state.extraction_success and 'single_combined_df' in st.session_state and not st.session_state.single_combined_df.empty:
     st.subheader("Edit Extracted Tables")
     st.caption("Double-click a cell to edit. Press 'Enter' or click outside to see calculations update.")
@@ -397,7 +414,6 @@ if 'extraction_success' in st.session_state and st.session_state.extraction_succ
         column_config=active_column_config
     )
 
-    # Corrected Logic: Perform the recalculation directly on the editor's output
     recalculated_combined_df = recalculate_editor_df_values(edited_df_from_widget)
     st.session_state.single_combined_df = recalculated_combined_df
 
@@ -590,4 +606,4 @@ if 'extraction_success' in st.session_state and st.session_state.extraction_succ
         st.info("No tables to display or download after processing.")
 
 st.markdown("---")
-st.markdown("Developed with ❤ using Streamlit, Camelot, Pandas, OpenPyXL.")
+st.markdown("Developed with ❤ using Streamlit, PDFPlumber, Pandas, OpenPyXL.") # Updated credit
