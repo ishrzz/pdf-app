@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Agg') # This tells matplotlib to use a non-interactive backend
+
 import streamlit as st
 import camelot
 import pandas as pd
@@ -590,4 +593,5 @@ if 'extraction_success' in st.session_state and st.session_state.extraction_succ
         st.info("No tables to display or download after processing.")
 
 st.markdown("---")
+
 st.markdown("Developed with ❤ using Streamlit, Camelot, Pandas, OpenPyXL.")
