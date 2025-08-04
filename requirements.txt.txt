@@ -1,6 +1,5 @@
 streamlit
-pdfplumber
 pandas
-
-matplotlib
-
+openpyxl
+camelot-py[cv]
+ghostscript
